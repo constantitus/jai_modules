@@ -1,0 +1,1 @@
+In case you're wondering which version of glfw this is, it's https://github.com/glfw/glfw/pull/2277 + the wayland patch.

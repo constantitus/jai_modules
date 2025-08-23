@@ -1,0 +1,48 @@
+--- src/context.c	2024-02-23 11:45:32
++++ src/context.c	2025-08-15 20:17:01
+@@ -660,6 +660,7 @@
+     }
+ 
+     window->context.swapBuffers(window);
++    window->swappedBuffers = GLFW_TRUE;
+ }
+ 
+ GLFWAPI void glfwSwapInterval(int interval)
+--- src/internal.h	2024-02-23 11:45:32
++++ src/internal.h	2025-08-15 20:17:01
+@@ -551,6 +551,9 @@
+     double              virtualCursorPosX, virtualCursorPosY;
+     GLFWbool            rawMouseMotion;
+ 
++    // Hack specifically for Wayland where swapping buffers causes an event
++    GLFWbool            swappedBuffers;
++
+     _GLFWcontext        context;
+ 
+     struct {
+--- src/wl_window.c	2024-02-23 11:45:32
++++ src/wl_window.c	2025-08-15 20:17:01
+@@ -1255,8 +1255,22 @@
+         if (fds[DISPLAY_FD].revents & POLLIN)
+         {
+             wl_display_read_events(_glfw.wl.display);
+-            if (wl_display_dispatch_pending(_glfw.wl.display) > 0)
++            int dispatched = wl_display_dispatch_pending(_glfw.wl.display);
++            if (dispatched > 0)
+                 event = GLFW_TRUE;
++
++            if (dispatched == 1) {
++                _GLFWwindow *window = _glfw.windowListHead;
++                while (window)
++                {
++                    if (window->swappedBuffers && !timeout) {
++                        window->swappedBuffers = GLFW_FALSE;
++                        event = GLFW_FALSE;
++                    }
++
++                    window = window->next;
++                }
++            }
+         }
+         else
+             wl_display_cancel_read(_glfw.wl.display);
