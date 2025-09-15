@@ -25,5 +25,5 @@
 // #define GLFW_EXPOSE_NATIVE_EGL
 // #define GLFW_EXPOSE_NATIVE_OSMESA
 
-#include "glfw-3.4/include/GLFW/glfw3.h"
-// #include "glfw-3.4/include/GLFW/glfw3native.h"
+#include "glfw/include/GLFW/glfw3.h"
+// #include "glfw/include/GLFW/glfw3native.h"
