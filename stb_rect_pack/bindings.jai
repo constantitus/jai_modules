@@ -1,7 +1,7 @@
 //
 // This file was auto-generated using the following command:
 //
-// jai generate.jai - -compile -ios
+// jai generate.jai - -compile
 //
 
 
@@ -85,7 +85,7 @@ stbrp_setup_heuristic :: (_context: *stbrp_context, heuristic: s32) -> void #for
 // Optionally select which packing heuristic the library should use. Different
 // heuristics will produce better/worse results for different data sets.
 // If you call init again, this will be reset to the default.
-STBRP_HEURISTIC_Skyline :: enum u32 {
+STBRP_HEURISTIC_Skyline :: enum s32 {
     default       :: 0;
     BL_sortHeight :: 0;
     BF_sortHeight :: 1;

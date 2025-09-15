@@ -4,7 +4,8 @@
 #define __EXPORT
 #endif
 
-#define STBRPDEF extern __EXPORT
+// fuck
+// #define STBRP_DEF extern __EXPORT
 
 #define STB_RECT_PACK_IMPLEMENTATION
 #include "stb_rect_pack.h"

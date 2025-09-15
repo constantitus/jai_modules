@@ -98,7 +98,17 @@ generate_bindings :: (args: [] string, minimum_os_version: type_of(Build_Options
 
             success := true;
             if os_target != .PS5 {
-                success &&= build_cpp_dynamic_lib(lib_path, source_file, target = os_target, debug = compile_debug, extra = extra);
+                success &&= build_cpp_dynamic_lib(lib_path, source_file, target = os_target, debug = compile_debug, extra = extra,
+                    library_files = ifx os_target == .WINDOWS then string.[
+                        // This library does not provide us with a macro that we can define as __declspec(dllexport),
+                        // but we know what symbols we want anyway. @Hack: We pass these as library_files because
+                        // they need to go to the linker. This is kind of awful.
+                        "/EXPORT:stbrp_setup_heuristic",
+                        "/EXPORT:stbrp_setup_allow_out_of_mem",
+                        "/EXPORT:stbrp_init_target",
+                        "/EXPORT:stbrp_pack_rects",
+                    ]
+                );
             }
             success &&= build_cpp_static_lib(lib_path, source_file, target = os_target, debug = compile_debug, extra = extra);
         }
