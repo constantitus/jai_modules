@@ -1,8 +1,9 @@
 // This is not complete.
 // - It can't check unnamed struct/union declarations (e.g. in `union { foo: int; bar: float; }`)
-// - It can't check if using declarations are actually used. (e.g. `using a: struct { foo: int; bar: float; }`).
-//   I should probably not check the using declarations at all so the output is less polluted.
+// - It can't check if using declarations are actually being used. I should probably not check the using
+//   declarations at all so the output is less polluted.
 // - It can't check if variables are used inside #asm blocks.
+// - The Code_Ident.resolved_declaration issue that is explained below.
 // - Some edge cases might not be handled. Dunno.
 
 
