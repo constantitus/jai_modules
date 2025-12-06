@@ -326,9 +326,25 @@ check_expression :: (expr: *Code_Node, decls: *[..]Declaration) {
     case .IDENT;
         code_ident := cast(*Code_Ident) expr;
 
-        for * decls.* {
-            if it.decl == code_ident.resolved_declaration || (it.decl.name == code_ident.name) {
+        // @Cleanup: For some Code_Ident's, the resolved_declaration is null for some reason, so we can't
+        // track the variable they're referencing.
+        // We iterate in reverse in case the resolved_decl is null so we can just pick the first declaration
+        // that has the same name.
+        for < * decls.* {
+            found: bool;
+            if code_ident.resolved_declaration != null {
+                if it.decl == code_ident.resolved_declaration {
+                    found = true;
+                }
+            } else {
+                // Fallback for when resolved_declaration is null.
+                if it.decl.name == code_ident.name {
+                    found = true;
+                }
+            }
+            if found {
                 it.use_count += 1;
+                break;
             }
         }
     }
