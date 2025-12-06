@@ -28,32 +28,43 @@ SRC_DIR    :: "source";
 
 
 generate_bindings :: (args: [] string, minimum_os_version: type_of(Build_Options.minimum_os_version)) -> bool {
-    compile        := array_find(args, "-compile");
-    compile_debug  := array_find(args, "-debug");
+    compile: bool;
+    compile_debug: bool;
+    generate: bool;
+    os_target := OS;
+    for args {
+        if it == {
+        case "-compile";       compile       = true;
+        case "-compile_debug"; compile_debug = true;
+        case "-generate";      generate      = true;
+        case "-ios";            os_target = .IOS;
+        case "-macos";          os_target = .MACOS;
+        case "-windows";        os_target = .WINDOWS;
+        case "-linux";          os_target = .LINUX;
+        }
+    }
 
-    // We only build for iOS for now.
-    os_target := Operating_System_Tag.IOS;
+    directory: string;
+    if os_target == {
+    case .IOS;      directory = "ios";
+    case .MACOS;    directory = "macos";
+    case .WINDOWS;  directory = "windows";
+    case .LINUX;    directory = "linux";
+    case; assert(false, "Unsupported target os %.", os_target);
+    }
 
     success := true;
     if compile {
+        make_directory_if_it_does_not_exist(directory);
         extra: [..]string;
-        array_add(*extra,
-            "-arch", "",
-            "-isysroot", "",
-            "-target", "",
-            "", // angle platform
-        );
 
         files: [..]string;
         array_add(*files, .. ANGLE_FILES);
-        array_add(*files, .. ANGLE_FILES_IOS);
-        array_add(*files, .. ANGLE_FILES_MACOS_AND_IOS);
         array_add(*files, .. ANGLE_FILES_EGL);
         array_add(*files, .. ANGLE_FILES_GLES);
         array_add(*files, .. ZLIB_FILES);
         array_add(*files, .. ASTCENC_FILES);
-        for * files    it.* = tprint("%/%", SRC_DIR, it.*);
-
+        for * files  it.* = tprint("%/%", SRC_DIR, it.*);
         for ANGLE_DEFINES  array_add(*extra, tprint("-D%", it));
 
         array_add(*extra,
@@ -72,122 +83,320 @@ generate_bindings :: (args: [] string, minimum_os_version: type_of(Build_Options
         );
 
         // Build angle
-        output := "ios/ANGLE";
-        output_x64_sim   := tprint("%_x64_sim",   output);
-        output_arm64_sim := tprint("%_arm64_sim", output);
-        output_fat_sim   := tprint("%_simulator", output);
+        if os_target == .IOS {
+            // Make space at the start of the array
+            array_resize(*extra, extra.count + 7);
+            for #v2 < i: 7..extra.count-1 { extra[i] = extra[i-7]; }
+            extra[0] = "-arch";
+            // extra[1] = "";
+            extra[2] = "-isysroot";
+            // extra[3] = "";
+            extra[4] = "-target";
+            // extra[5] = "";
+            // extra[6] = ""; // -DANGLE_PLATFORM_
 
-        make_directory_if_it_does_not_exist("ios");
+            for ANGLE_DEFINES_IOS  array_add(*extra, tprint("-D%", it));
 
-        array_add(*extra,
-            "-mios-version-min=16.4", // As per angle and astcenc requirements
-            "-fno-objc-arc", "-fno-objc-msgsend-selector-stubs",
-            "-Wno-unused-command-line-argument",
-            "-Wno-deprecated", // treating 'c' input as 'c++' when in C++ mode
-        );
+            array_add(*extra,
+                "-mios-version-min=16.4", // As per angle and astcenc requirements
+                "-fno-objc-arc", // "-fno-objc-msgsend-selector-stubs",
+                "-Wno-unused-command-line-argument",
+                "-Wno-deprecated", // treating 'c' input as 'c++' when in C++ mode
+            );
 
-        // iOS
-        extra[1] = "arm64";
-        extra[3] = get_ios_sdk_path();
-        extra[5] = get_ios_target_triple();
-        extra[6] = "-DANGLE_PLATFORM_IOS_FAMILY_SIMULATOR"; // This define is very confusing...
+            for ANGLE_FILES_IOS            array_add(*files, tprint("%/%", SRC_DIR, it));
+            for ANGLE_FILES_MACOS_AND_IOS  array_add(*files, tprint("%/%", SRC_DIR, it));
 
-        success &&= build_angle_variant(output, .. files, extra, debug=compile_debug);
+            output := tprint("%/ANGLE", directory);
+            output_x64_sim   := tprint("%_x64_sim",   output);
+            output_arm64_sim := tprint("%_arm64_sim", output);
+            output_fat_sim   := tprint("%_simulator", output);
 
-        // iOS-simulator
-        extra[3] = get_ios_sdk_path(simulator=true);
-        extra[5] = get_ios_target_triple(simulator=true);
-        extra[6] = "-DANGLE_PLATFORM_IOS_FAMILY";
+            // iOS
+            extra[1] = "arm64";
+            extra[3] = get_ios_sdk_path();
+            extra[5] = get_ios_target_triple();
+            extra[6] = "-DANGLE_PLATFORM_IOS_FAMILY_SIMULATOR"; // This define is very confusing...
 
-        extra[1] = "arm64";
-        success &&= build_angle_variant(output_arm64_sim, .. files, extra, debug=compile_debug);
+            success &&= build_angle_variant(output, .. files, extra, debug=compile_debug, os_target=os_target);
 
-        extra[1] = "x86_64";
-        extra[5] = get_ios_target_triple(cpu=.X64, simulator=true);
-        success &&= build_angle_variant(output_x64_sim, .. files, extra, debug=compile_debug);
+            // iOS-simulator
+            extra[3] = get_ios_sdk_path(simulator=true);
+            extra[5] = get_ios_target_triple(simulator=true);
+            extra[6] = "-DANGLE_PLATFORM_IOS_FAMILY";
 
-        success &&= run_command(
-            "lipo", "-create", 
-            "-output", tprint("%.a", output_fat_sim),
-            tprint("%.a", output_arm64_sim),
-            tprint("%.a", output_x64_sim),
-            print_captured_output=true
-        ).exit_code == 0;
+            extra[1] = "arm64";
+            success &&= build_angle_variant(output_arm64_sim, .. files, extra, debug=compile_debug, os_target=os_target);
 
-        if !success  return false;
+            extra[1] = "x86_64";
+            extra[5] = get_ios_target_triple(cpu=.X64, simulator=true);
+            success &&= build_angle_variant(output_x64_sim, .. files, extra, debug=compile_debug, os_target=os_target);
+
+            success &&= run_command(
+                "lipo", "-create", 
+                "-output", tprint("%.a", output_fat_sim),
+                tprint("%.a", output_arm64_sim),
+                tprint("%.a", output_x64_sim),
+                print_captured_output=true
+            ).exit_code == 0;
+
+            if !success  return false;
+        } else if os_target == .MACOS { // @Untested
+            // Make space at the start of the array
+            array_resize(*extra, extra.count + 2);
+            for #v2 < i: 2..extra.count-1 { extra[i] = extra[i-2]; }
+            extra[0] = "-arch";
+            // extra[1] = "";
+
+            for ANGLE_DEFINES_MACOS  array_add(*extra, tprint("-D%", it));
+
+            array_add(*extra,
+                "-fno-objc-arc", // "-fno-objc-msgsend-selector-stubs",
+                "-Wno-unused-command-line-argument",
+                "-Wno-deprecated", // treating 'c' input as 'c++' when in C++ mode
+            );
+
+            for ANGLE_FILES_MACOS          array_add(*files, tprint("%/%", SRC_DIR, it));
+            for ANGLE_FILES_MACOS_AND_IOS  array_add(*files, tprint("%/%", SRC_DIR, it));
+
+            output := tprint("%/ANGLE", directory);
+            output_arm64 := tprint("%_arm64", output);
+            output_x64   := tprint("%_x64",   output);
+
+            // arm64
+            extra[1] = "arm64";
+            extra[2] = "-mmacos-version-min=11.0";
+            success &&= build_angle_variant(output_arm64, .. files, extra, debug=compile_debug, os_target=os_target);
+
+            // x64
+            extra[1] = "x86_64";
+            extra[2] = "-mmacos-version-min=11.0";
+            success &&= build_angle_variant(output_x64, .. files, extra, debug=compile_debug, os_target=os_target);
+
+            success &&= run_command(
+                "lipo", "-create", 
+                "-output", tprint("%.a", output),
+                tprint("%.a", output_arm64),
+                tprint("%.a", output_x64),
+                print_captured_output=true
+            ).exit_code == 0 ;
+
+            success &&= run_command(
+                "lipo", "-create", 
+                "-output", tprint("%.dylib", output),
+                tprint("%.dylib", output_arm64),
+                tprint("%.dylib", output_x64),
+                print_captured_output=true
+            ).exit_code == 0 ;
+
+        } else if os_target == .WINDOWS {
+            for ANGLE_FILES_WINDOWS    array_add(*files, tprint("%/%", SRC_DIR, it));
+            for ANGLE_DEFINES_WINDOWS  array_add(*extra, tprint("-D%", it));
+
+            output := tprint("%/ANGLE", directory);
+            success &&= build_angle_variant(output, .. files, extra, debug=compile_debug, os_target=os_target);
+        } else if os_target == .LINUX {
+            for ANGLE_FILES_LINUX    array_add(*files, tprint("%/%", SRC_DIR, it));
+            for ANGLE_DEFINES_LINUX  array_add(*extra, tprint("-D%", it));
+
+            output := tprint("%/ANGLE", directory);
+            success &&= build_angle_variant(output, .. files, extra, debug=compile_debug, os_target=os_target);
+        }
         reset_temporary_storage();
     }
 
-    options: Generate_Bindings_Options;
-    using options;
+    if generate {
+        options: Generate_Bindings_Options;
+        using options;
 
-    os = os_target;
-    cpu = .ARM64;
+        os = os_target;
+        cpu = .ARM64;
 
-    array_add(*library_search_paths, "ios");
-    array_add(*libraries, .{filename="ANGLE"});
-    array_add(*include_paths, tprint("%/angle/include", SRC_DIR));
-    for EGL_HEADERS   array_add(*source_files, tprint("%/angle/include/%", SRC_DIR, it));
-    for GLES_HEADERS  array_add(*source_files, tprint("%/angle/include/%", SRC_DIR, it));
+        array_add(*library_search_paths, directory);
+        array_add(*libraries, .{filename="ANGLE"});
+        array_add(*include_paths, tprint("%/angle/include", SRC_DIR));
+        for EGL_HEADERS   array_add(*source_files, tprint("%/angle/include/%", SRC_DIR, it));
+        for GLES_HEADERS  array_add(*source_files, tprint("%/angle/include/%", SRC_DIR, it));
 
-    generate_library_declarations = false;
-    auto_detect_enum_prefixes = true;
-    log_stripped_declarations = false;
-    generate_compile_time_struct_checks = false;
+        generate_library_declarations = false;
+        auto_detect_enum_prefixes = true;
+        log_stripped_declarations = false;
+        generate_compile_time_struct_checks = false;
 
-    visitor = angle_visitor;
-
-    return generate_bindings(options, "bindings.jai");
+        visitor = angle_visitor;
+        success = generate_bindings(options, "bindings.jai");
+    }
+    return success;
 }
 
-build_angle_variant :: (output: string, files: .. string, extra: []string, debug: bool) -> bool {
+build_angle_variant :: (output: string, files: .. string, extra: []string, debug: bool, os_target := OS) -> bool {
     auto_release_temp();
     success := true;
-
-    // ANGLE can't be build in a single translation unit, sadly. So we have to do multiple objt files
+    // ANGLE can't be build in a single translation unit, sadly. So we have to do multiple object files
     // and link them, which BuildCpp cannot do atm.
+    #import "Thread";
+    #import "System";
+    ncpus := get_number_of_processors();
+    assert(ncpus >= 1);
+    ncpus = max(ncpus-1, 2);
+
+    // @Cleanup: Too much stuff in here...
+    Data :: struct {
+        current_index: s64;
+        files: []string;
+        extra: []string;
+        objs: *[]string;
+        cc, cxx: string;
+        debug: bool;
+        os_target := OS;
+
+        success := true;
+    }
+    data: Data;
+
     objs := NewArray(files.count, string,, temp);
-    for files {
+    data.files = files;
+    data.objs  = *objs;
+    data.extra = extra;
+    data.debug = debug;
+    data.os_target = os_target;
+
+    #if OS == .WINDOWS  #import "Windows";
+    else                #import "POSIX";
+    data.cc  = to_string(getenv("CC"));
+    data.cxx = to_string(getenv("CXX"));
+    if !data.cc   data.cc  = ifx os_target == .WINDOWS then "cl.exe" else "clang";
+    if !data.cxx  data.cxx = ifx os_target == .WINDOWS then "cl.exe" else "clang++";
+
+    compile_proc :: (group: *Thread_Group, thread: *Thread, work: *void) -> Thread_Continue_Status {
+        using data := cast(*Data) group.data;
+        index := cast(s64) work;
+
+        it := files[index];
         i := find_index_from_right(it, ".");
         assert(i > 0);
+
         basename := slice(it, 0, i);
-        out_path := tprint("%.o", basename);
-        objs[it_index] = out_path;
+        out_path: string = ---;
+        if os_target == .WINDOWS  out_path = sprint("%.obj", basename);
+        else                      out_path = sprint("%.o", basename);
+        objs.data[index] = out_path;
+
+        // if file_exists(out_path)  return .CONTINUE;
 
         args: [..]string;
-        array_reserve(*args, extra.count+8);
-        
+        array_reserve(*args, extra.count+10);
+
+        if os_target == .WINDOWS  array_add(*args, "/nologo");
+
         if ends_with(it, ".c") {
-            array_add(*args, "clang");
+            array_add(*args, data.cc);
         } else {
-            array_add(*args, "clang++", "-std=c++17");
+            array_add(*args, data.cxx);
+            if os_target == .WINDOWS  array_add(*args, "/std:c++17");
+            else                      array_add(*args, "-std=c++17");
         }
+
+        if os_target == .LINUX    array_add(*args, "-fPIC");
+        if os_target == .WINDOWS  array_add(*args, "/MT");
 
         array_add(*args, .. extra);
 
         if debug {
-            array_add(*args, "-g", "-Og");
+            if os_target == .WINDOWS  array_add(*args, "/Zi", "-Od");
+            else                      array_add(*args, "-g", "-Og");
         } else {
-            array_add(*args, "-O3");
+            if os_target == .WINDOWS  array_add(*args, "/Ox");
+            else                      array_add(*args, "-O3");
         }
 
-        array_add(*args, "-c", "-o", out_path, it);
+        if os_target == .WINDOWS  array_add(*args, "/c", tprint("/Fo:%", out_path), it);
+        else                      array_add(*args, "-c", "-o", out_path, it);
 
-        if !success break;
+        if !success return .STOP;
         log("%", get_quoted_command_string(args));
         result, output_string, error_string := run_command(..args, capture_and_return_output=true, print_captured_output=true);
         success &&= result.exit_code == 0;
+
+        return ifx success then .CONTINUE else .STOP;
     }
 
-    if success {
-        // Using ar directly because BuildCpp does not like when we don't pass files...
-        cmd: [..]string;
-        ar := "ar";
-        array_add(*cmd, ar, "rcs", tprint("%.a", output));
+    threads: Thread_Group;
+    init(*threads, ncpus, compile_proc);
+    threads.data = *data;
+    threads.logging = false;
+    start(*threads);
+
+    for files  add_work(*threads, cast(*void) it_index);
+
+    remaining := files.count;
+    while remaining > 0 {
+        sleep_milliseconds(1);
+        results := get_completed_work(*threads);
+        remaining -= results.count;
+        if threads.should_exit || !data.success  break;
+    }
+
+    shutdown(*threads);
+
+    if !data.success  return false;
+
+    // Using ar directly because BuildCpp does not like when we don't pass files...
+    cmd: [..]string;
+    if os_target == .WINDOWS {
+        // Make dll (before we make the static lib so it doesn't overwrite it. sigh)
+        array_add(*cmd, "link.exe", "/DLL", "user32.lib", "gdi32.lib", "dxguid.lib", "d3d11.lib", "dxgi.lib", tprint("/OUT:%.dll", output));
         array_add(*cmd, .. objs);
         log("%", get_quoted_command_string(cmd));
         success = run_command(.. cmd, print_captured_output=true).exit_code == 0;
-    };
+        array_reset(*cmd);
+
+        // Make static lib
+        array_add(*cmd, "lib.exe", tprint("/OUT:%.lib", output));
+        array_add(*cmd, .. objs);
+        log("%", get_quoted_command_string(cmd));
+        success = run_command(.. cmd, print_captured_output=true).exit_code == 0;
+    } else {
+        if os_target != .IOS {
+            suffix := ifx os_target == .MACOS then "dylib" else "so";
+            array_add(*cmd, data.cxx, "-shared", "-o", tprint("%.%", output, suffix));
+
+            if os_target == .MACOS {
+                array_add(*cmd, "-arch", extra[1]); // sigh...
+                array_add(*cmd,
+                    "-framework", "Foundation",
+                    "-framework", "CoreFoundation",
+                    "-framework", "CoreGraphics",
+                    "-framework", "QuartzCore",
+                    "-framework", "IOKit",
+                    "-framework", "IOSurface",
+                    "-framework", "Metal",
+                );
+            }
+
+            if os_target == .LINUX {
+                array_add(*cmd,
+                    "-lvulkan",
+                    // "-lwayland-client",
+                );
+            }
+
+            array_add(*cmd, .. objs);
+            log("%", get_quoted_command_string(cmd));
+            success &&= run_command(.. cmd, print_captured_output=true).exit_code == 0;
+            array_reset(*cmd);
+        }
+
+        // Make static lib
+        ar := to_string(getenv("CC"));
+        if !ar  ar = "ar";
+        out := tprint("%.a", output);
+        file_delete(out); // Because ar appends to existing archives instead of creating new ones.
+        array_add(*cmd, ar, "rcs", out);
+        array_add(*cmd, .. objs);
+        log("%", get_quoted_command_string(cmd));
+        success &&= run_command(.. cmd, print_captured_output=true).exit_code == 0;
+    }
 
     return success;
 }
@@ -197,6 +406,7 @@ build_angle_variant :: (output: string, files: .. string, extra: []string, debug
 #import "Thread";
 #import "Compiler";
 #import "File";
+#import "File_Utilities";
 #import "Process";
 #import "Bindings_Generator";
 #import "Toolchains/iOS";
@@ -222,7 +432,7 @@ GLES_HEADERS :: string.[
 
 
 angle_visitor :: (decl: *Declaration, parent_decl: *Declaration) -> Declaration_Visit_Result {
-    assert(xx decl.name);
+    // assert(xx decl.name);
 
     if begins_with_nocase(decl.name, "khronos_") {
         decl.decl_flags |= .OMIT_FROM_OUTPUT;
@@ -255,6 +465,14 @@ angle_visitor :: (decl: *Declaration, parent_decl: *Declaration) -> Declaration_
         // it's u32 since the spec requires it to be unsigned anyway.
         //          -constantitus  2025-07-20
         decl.type = context.generator.type_def_u32;
+    }
+
+    // We put these in module.jai so we don't have to generate bindings_*.jai for every platform.
+    if decl.name == "EGLNativeDisplayType" ||
+       decl.name == "EGLNativePixmapType" ||
+       decl.name == "EGLNativeWindowType" {
+        decl.decl_flags |= .OMIT_FROM_OUTPUT;
+        return .STOP;
     }
 
 
@@ -572,6 +790,17 @@ ANGLE_FILES_IOS :: string.[
     "angle/src/libANGLE/renderer/driver_utils_ios.mm",
 ];
 
+ANGLE_FILES_MACOS :: string.[
+    "angle/src/gpu_info_util/SystemInfo_macos.mm",
+    "angle/src/common/gl/cgl/FunctionsCGL.cpp",
+    "angle/src/libANGLE/renderer/gl/cgl/ContextCGL.cpp",
+    "angle/src/libANGLE/renderer/gl/cgl/DeviceCGL.cpp",
+    "angle/src/libANGLE/renderer/gl/cgl/DisplayCGL.mm",
+    "angle/src/libANGLE/renderer/gl/cgl/IOSurfaceSurfaceCGL.cpp",
+    "angle/src/libANGLE/renderer/gl/cgl/PbufferSurfaceCGL.cpp",
+    "angle/src/libANGLE/renderer/gl/cgl/WindowSurfaceCGL.mm",
+];
+
 ANGLE_FILES_MACOS_AND_IOS :: string.[
     "angle/src/common/apple_platform_utils.mm",
     "angle/src/common/system_utils_posix.cpp",
@@ -688,6 +917,200 @@ ANGLE_FILES_MACOS_AND_IOS :: string.[
     // "angle/src/common/system_utils_ios.mm",
 ];
 
+ANGLE_FILES_WINDOWS :: string.[
+    "angle/src/common/system_utils_win.cpp",
+    "angle/src/common/system_utils_win32.cpp",
+    "angle/src/compiler/translator/hlsl/ASTMetadataHLSL.cpp",
+    "angle/src/compiler/translator/hlsl/AtomicCounterFunctionHLSL.cpp",
+    "angle/src/compiler/translator/hlsl/BuiltInFunctionEmulatorHLSL.cpp",
+    "angle/src/compiler/translator/hlsl/ImageFunctionHLSL.cpp",
+    "angle/src/compiler/translator/hlsl/OutputHLSL.cpp",
+    "angle/src/compiler/translator/hlsl/ResourcesHLSL.cpp",
+    "angle/src/compiler/translator/hlsl/ShaderStorageBlockFunctionHLSL.cpp",
+    "angle/src/compiler/translator/hlsl/ShaderStorageBlockOutputHLSL.cpp",
+    "angle/src/compiler/translator/hlsl/StructureHLSL.cpp",
+    "angle/src/compiler/translator/hlsl/TextureFunctionHLSL.cpp",
+    "angle/src/compiler/translator/hlsl/TranslatorHLSL.cpp",
+    "angle/src/compiler/translator/hlsl/UtilsHLSL.cpp",
+    "angle/src/compiler/translator/hlsl/blocklayoutHLSL.cpp",
+    "angle/src/compiler/translator/hlsl/emulated_builtin_functions_hlsl_autogen.cpp",
+    "angle/src/compiler/translator/tree_ops/hlsl/AddDefaultReturnStatements.cpp",
+    "angle/src/compiler/translator/tree_ops/hlsl/AggregateAssignArraysInSSBOs.cpp",
+    "angle/src/compiler/translator/tree_ops/hlsl/AggregateAssignStructsInSSBOs.cpp",
+    "angle/src/compiler/translator/tree_ops/hlsl/ArrayReturnValueToOutParameter.cpp",
+    "angle/src/compiler/translator/tree_ops/hlsl/BreakVariableAliasingInInnerLoops.cpp",
+    "angle/src/compiler/translator/tree_ops/hlsl/ExpandIntegerPowExpressions.cpp",
+    "angle/src/compiler/translator/tree_ops/hlsl/RecordUniformBlocksWithLargeArrayMember.cpp",
+    "angle/src/compiler/translator/tree_ops/hlsl/RemoveSwitchFallThrough.cpp",
+    "angle/src/compiler/translator/tree_ops/hlsl/RewriteAtomicFunctionExpressions.cpp",
+    "angle/src/compiler/translator/tree_ops/hlsl/RewriteElseBlocks.cpp",
+    "angle/src/compiler/translator/tree_ops/hlsl/RewriteExpressionsWithShaderStorageBlock.cpp",
+    "angle/src/compiler/translator/tree_ops/hlsl/RewriteUnaryMinusOperatorInt.cpp",
+    "angle/src/compiler/translator/tree_ops/hlsl/SeparateArrayConstructorStatements.cpp",
+    "angle/src/compiler/translator/tree_ops/hlsl/SeparateArrayInitialization.cpp",
+    "angle/src/compiler/translator/tree_ops/hlsl/SeparateExpressionsReturningArrays.cpp",
+    "angle/src/compiler/translator/tree_ops/hlsl/UnfoldShortCircuitToIf.cpp",
+    "angle/src/compiler/translator/tree_ops/hlsl/WrapSwitchStatementsInBlocks.cpp",
+    "angle/src/gpu_info_util/SystemInfo_win.cpp",
+    "angle/src/libANGLE/renderer/d3d_format.cpp",
+    "angle/src/libANGLE/renderer/dxgi_format_map_autogen.cpp",
+    "angle/src/libANGLE/renderer/dxgi_support_table_autogen.cpp",
+    "angle/src/libANGLE/renderer/d3d/BufferD3D.cpp",
+    "angle/src/libANGLE/renderer/d3d/CompilerD3D.cpp",
+    "angle/src/libANGLE/renderer/d3d/DisplayD3D.cpp",
+    "angle/src/libANGLE/renderer/d3d/DynamicHLSL.cpp",
+    "angle/src/libANGLE/renderer/d3d/DynamicImage2DHLSL.cpp",
+    "angle/src/libANGLE/renderer/d3d/EGLImageD3D.cpp",
+    "angle/src/libANGLE/renderer/d3d/FramebufferD3D.cpp",
+    "angle/src/libANGLE/renderer/d3d/HLSLCompiler.cpp",
+    "angle/src/libANGLE/renderer/d3d/ImageD3D.cpp",
+    "angle/src/libANGLE/renderer/d3d/IndexBuffer.cpp",
+    "angle/src/libANGLE/renderer/d3d/IndexDataManager.cpp",
+    "angle/src/libANGLE/renderer/d3d/NativeWindowD3D.cpp",
+    "angle/src/libANGLE/renderer/d3d/ProgramD3D.cpp",
+    "angle/src/libANGLE/renderer/d3d/ProgramExecutableD3D.cpp",
+    "angle/src/libANGLE/renderer/d3d/RenderTargetD3D.cpp",
+    "angle/src/libANGLE/renderer/d3d/RenderbufferD3D.cpp",
+    "angle/src/libANGLE/renderer/d3d/RendererD3D.cpp",
+    "angle/src/libANGLE/renderer/d3d/ShaderD3D.cpp",
+    "angle/src/libANGLE/renderer/d3d/ShaderExecutableD3D.cpp",
+    "angle/src/libANGLE/renderer/d3d/SurfaceD3D.cpp",
+    "angle/src/libANGLE/renderer/d3d/SwapChainD3D.cpp",
+    "angle/src/libANGLE/renderer/d3d/TextureD3D.cpp",
+    "angle/src/libANGLE/renderer/d3d/VertexBuffer.cpp",
+    "angle/src/libANGLE/renderer/d3d/VertexDataManager.cpp",
+    "angle/src/libANGLE/renderer/d3d/driver_utils_d3d.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/Blit11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/Buffer11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/Clear11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/Context11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/DebugAnnotator11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/Device11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/ExternalImageSiblingImpl11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/Fence11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/Framebuffer11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/Image11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/IndexBuffer11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/InputLayoutCache.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/MappedSubresourceVerifier11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/PixelTransfer11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/Program11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/ProgramPipeline11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/Query11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/RenderStateCache.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/RenderTarget11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/Renderer11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/ResourceManager11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/ShaderExecutable11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/StateManager11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/StreamProducerD3DTexture.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/SwapChain11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/TextureStorage11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/TransformFeedback11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/Trim11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/VertexArray11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/VertexBuffer11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/formatutils11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/renderer11_utils.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/texture_format_table.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/texture_format_table_autogen.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/converged/CompositorNativeWindow11.cpp",
+    "angle/src/libANGLE/renderer/d3d/d3d11/win32/NativeWindow11Win32.cpp",
+];
+
+ANGLE_FILES_LINUX :: string.[
+    "angle/src/common/system_utils_linux.cpp",
+    "angle/src/common/system_utils_posix.cpp",
+    "angle/src/common/linux/dma_buf_utils.cpp",
+    "angle/src/common/spirv/spirv_instruction_builder_autogen.cpp",
+    "angle/src/common/spirv/spirv_instruction_parser_autogen.cpp",
+    "angle/src/common/vulkan/libvulkan_loader.cpp",
+    "angle/src/common/vulkan/vulkan_icd.cpp",
+    "angle/src/compiler/translator/spirv/BuildSPIRV.cpp",
+    "angle/src/compiler/translator/spirv/BuiltinsWorkaround.cpp",
+    "angle/src/compiler/translator/spirv/OutputSPIRV.cpp",
+    "angle/src/compiler/translator/spirv/TranslatorSPIRV.cpp",
+    "angle/src/compiler/translator/tree_ops/spirv/ClampGLLayer.cpp",
+    "angle/src/compiler/translator/tree_ops/spirv/EmulateAdvancedBlendEquations.cpp",
+    "angle/src/compiler/translator/tree_ops/spirv/EmulateDithering.cpp",
+    "angle/src/compiler/translator/tree_ops/spirv/EmulateFragColorData.cpp",
+    "angle/src/compiler/translator/tree_ops/spirv/EmulateFramebufferFetch.cpp",
+    "angle/src/compiler/translator/tree_ops/spirv/EmulateYUVBuiltIns.cpp",
+    "angle/src/compiler/translator/tree_ops/spirv/FlagSamplersWithTexelFetch.cpp",
+    "angle/src/compiler/translator/tree_ops/spirv/ReswizzleYUVOps.cpp",
+    "angle/src/compiler/translator/tree_ops/spirv/RewriteInterpolateAtOffset.cpp",
+    "angle/src/compiler/translator/tree_ops/spirv/RewriteR32fImages.cpp",
+    "angle/src/compiler/translator/tree_ops/spirv/RewriteSamplerExternalTexelFetch.cpp",
+    "angle/src/gpu_info_util/SystemInfo_linux.cpp",
+    "angle/src/gpu_info_util/SystemInfo_vulkan.cpp",
+    "angle/src/libANGLE/renderer/vulkan/AllocatorHelperPool.cpp",
+    "angle/src/libANGLE/renderer/vulkan/BufferVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/CommandQueue.cpp",
+    "angle/src/libANGLE/renderer/vulkan/CompilerVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/ContextVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/DebugAnnotatorVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/DeviceVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/DisplayVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/FenceNVVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/FramebufferVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/ImageVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/MemoryObjectVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/MemoryTracking.cpp",
+    "angle/src/libANGLE/renderer/vulkan/OverlayVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/PersistentCommandPool.cpp",
+    "angle/src/libANGLE/renderer/vulkan/ProgramExecutableVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/ProgramPipelineVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/ProgramVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/QueryVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/RenderTargetVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/RenderbufferVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/SamplerVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/SecondaryCommandBuffer.cpp",
+    "angle/src/libANGLE/renderer/vulkan/SecondaryCommandPool.cpp",
+    "angle/src/libANGLE/renderer/vulkan/SemaphoreVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/ShaderInterfaceVariableInfoMap.cpp",
+    "angle/src/libANGLE/renderer/vulkan/ShaderVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/ShareGroupVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/Suballocation.cpp",
+    "angle/src/libANGLE/renderer/vulkan/SurfaceVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/SyncVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/TextureVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/TransformFeedbackVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/UtilsVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/VertexArrayVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/VkImageImageSiblingVk.cpp",
+    "angle/src/libANGLE/renderer/vulkan/VulkanSecondaryCommandBuffer.cpp",
+    "angle/src/libANGLE/renderer/vulkan/spv_utils.cpp",
+    "angle/src/libANGLE/renderer/vulkan/vk_cache_utils.cpp",
+    "angle/src/libANGLE/renderer/vulkan/vk_caps_utils.cpp",
+    "angle/src/libANGLE/renderer/vulkan/vk_format_table_autogen.cpp",
+    "angle/src/libANGLE/renderer/vulkan/vk_format_utils.cpp",
+    "angle/src/libANGLE/renderer/vulkan/vk_helpers.cpp",
+    "angle/src/libANGLE/renderer/vulkan/vk_internal_shaders_autogen.cpp",
+    "angle/src/libANGLE/renderer/vulkan/vk_mandatory_format_support_table_autogen.cpp",
+    "angle/src/libANGLE/renderer/vulkan/vk_ref_counted_event.cpp",
+    "angle/src/libANGLE/renderer/vulkan/vk_renderer.cpp",
+    "angle/src/libANGLE/renderer/vulkan/vk_resource.cpp",
+    "angle/src/libANGLE/renderer/vulkan/vk_utils.cpp",
+    "angle/src/libANGLE/renderer/vulkan/vk_mem_alloc_wrapper.cpp",
+    "angle/src/libANGLE/renderer/vulkan/linux/DeviceVkLinux.cpp",
+    "angle/src/libANGLE/renderer/vulkan/linux/DisplayVkLinux.cpp",
+    "angle/src/libANGLE/renderer/vulkan/linux/DisplayVkOffscreen.cpp",
+    "angle/src/libANGLE/renderer/vulkan/linux/DmaBufImageSiblingVkLinux.cpp",
+    "angle/src/libANGLE/renderer/vulkan/linux/xcb/DisplayVkXcb.cpp",
+    "angle/src/libANGLE/renderer/vulkan/linux/xcb/WindowSurfaceVkXcb.cpp",
+    // "angle/src/libANGLE/renderer/vulkan/linux/wayland/DisplayVkWayland.cpp",
+    // "angle/src/libANGLE/renderer/vulkan/linux/wayland/WindowSurfaceVkWayland.cpp",
+    "angle/src/libANGLE/renderer/vulkan/linux/headless/DisplayVkHeadless.cpp",
+    "angle/src/libANGLE/renderer/vulkan/linux/headless/WindowSurfaceVkHeadless.cpp",
+    "angle/src/libANGLE/renderer/vulkan/linux/gbm/DisplayVkGbm.cpp",
+    "angle/src/libANGLE/renderer/vulkan/linux/display/DisplayVkSimple.cpp",
+    "angle/src/libANGLE/renderer/vulkan/linux/display/WindowSurfaceVkSimple.cpp",
+    "angle/src/libANGLE/renderer/vulkan/android/vk_android_utils.cpp",
+    // "angle/src/third_party/volk/volk.c",
+    "vma.cpp", 
+];
+
 ANGLE_FILES_EGL :: string.[
     "angle/src/libEGL/egl_loader_autogen.cpp",
     "angle/src/libEGL/libEGL_autogen.cpp",
@@ -710,35 +1133,22 @@ ANGLE_FILES_GLES :: string.[
 ];
 
 ANGLE_DEFINES :: string.[
-    "ANGLE_PLATFORM_APPLE=1",
-    "IOS_ENABLED",
-    "UNIX_ENABLED",
-
     "ANGLE_CAPTURE_ENABLED=0",
     "ANGLE_ENABLE_ESSL=1",
     "ANGLE_ENABLE_GLSL=1",
-    "ANGLE_EXPORT=",
     "ANGLE_IS_64_BIT_CPU=1",
     "ANGLE_STANDALONE_BUILD=1",
     "ANGLE_STATIC=1",
-    "ANGLE_UTIL_EXPORT=\"\"",
 
-    "ANGLE_ENABLE_METAL=1",
     "ANGLE_ENABLE_GL_NULL=1",
     "ANGLE_ENABLE_EAGL=1",
     "GLES_SILENCE_DEPRECATION=1",
 
-    "EGLAPI=",
-    "GL_API=",
-    "GL_APICALL=",
     "GL_SILENCE_DEPRECATION=1",
 
     "USE_AURA=1",
     "_HAS_EXCEPTIONS=0",
     "NDEBUG=1",
-    "NVALGRIND=1",
-    "DYNAMIC_ANNOTATIONS_ENABLED=0",
-    "ANGLE_VMA_VERSION=3000000",
     "ANGLE_ENABLE_SHARE_CONTEXT_LOCK=1",
     "ANGLE_ENABLE_CONTEXT_MUTEX=1",
     "ANGLE_OUTSIDE_WEBKIT=1",
@@ -754,19 +1164,57 @@ ANGLE_DEFINES :: string.[
 
     // GLES
     "LIBGLESV2_IMPLEMENTATION=1",
-];
 
-/* ANGLE_DEFINES_MACOS :: string.[
-    "ANGLE_PLATFORM_MACOS",
-    "ANGLE_IS_MAC=1",
-    "ANGLE_ENABLE_OPENGL=1",
-    "ANGLE_ENABLE_GL_DESKTOP_BACKEND=1",
-    "ANGLE_ENABLE_CGL=1",
-]; */
+];
 
 ANGLE_DEFINES_IOS :: string.[
-    "ANGLE_PLATFORM_IOS_FAMILY_SIMULATOR",
-    "ANGLE_PLATFORM_IOS_FAMILY",
+    "ANGLE_PLATFORM_APPLE=1",
+    "ANGLE_ENABLE_METAL=1",
 ];
 
+ANGLE_DEFINES_MACOS :: string.[
+    "ANGLE_PLATFORM_MACOS=1",
+    "ANGLE_IS_MAC=1",
+    "ANGLE_ENABLE_OPENGL=1",
+    "ANGLE_ENABLE_METAL=1",
+    "ANGLE_ENABLE_GL_DESKTOP_BACKEND=1",
+    "ANGLE_ENABLE_CGL=1",
+];
 
+ANGLE_DEFINES_WINDOWS :: string.[
+    "ANGLE_PLATFORM_WINDOWS=1",
+    "ANGLE_IS_WIN=1",
+    "ANGLE_WINDOWS_NO_FUTEX=1",
+    "ANGLE_ENABLE_D3D11=1",
+    "ANGLE_ENABLE_D3D11_COMPOSITOR_NATIVE_WINDOW=1",
+    "ANGLE_ENABLE_HLSL=1",
+    "ANGLE_PRELOADED_D3DCOMPILER_MODULE_NAMES={\"d2dcompiler_47.dll\",\"d2dcompiler_46.dll\",\"d2dcompiler_43.dll\"}",
+    "NOMINMAX=1",
+    "X86_WINDOWS=1",
+    "WINVER=0x0A00",
+    "_WIN32_WINNT=0x0A00",
+    "ANGLE_EXPORT=__declspec(dllexport)",
+    "ANGLE_UTIL_EXPORT=__declspec(dllexport)",
+    "EGLAPI=__declspec(dllexport)",
+    "GL_API=__declspec(dllexport)",
+    "GL_APICALL=__declspec(dllexport)",
+];
+
+ANGLE_DEFINES_LINUX :: string.[
+    "ANGLE_PLATFORM_LINUX=1",
+    "ANGLE_ENABLE_VULKAN=1",
+    "ANGLE_USE_VULKAN=1",
+    "ANGLE_USE_PTHREADS=1",
+    "ANGLE_IS_LINUX=1",
+    "ANGLE_USE_X11",
+    // "ANGLE_USE_WAYLAND",
+    "_FILE_OFFSET_BITS=64",
+    // "ANGLE_SHARED_LIBVULKAN=1",
+    // "VK_NO_PROTOTYPES=1",
+    "_POSIX_C_SOURCE=200112L",
+    // "VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME=VK_KHR_wayland_surface",
+    // "VK_USE_PLATFORM_WAYLAND_KHR",
+    "VK_KHR_XCB_SURFACE_EXTENSION_NAME=VK_KHR_xcb_surface",
+    "VK_USE_PLATFORM_XCB_KHR",
+    "ANGLE_VK_MOCK_ICD_JSON=\"$angle_data_dir/VkICD_mock_icd.json\"", // ???
+];

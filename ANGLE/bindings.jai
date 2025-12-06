@@ -1,7 +1,7 @@
 //
 // This file was auto-generated using the following command:
 //
-// jai generate.jai - -compile
+// jai generate.jai - -compile -generate -windows
 //
 
 
@@ -4478,10 +4478,6 @@ GL_TEXTURE_BINDING_2D_MULTISAMPLE_ARRAY :: 0x9105;
 GL_SAMPLER_2D_MULTISAMPLE_ARRAY :: 0x910B;
 GL_INT_SAMPLER_2D_MULTISAMPLE_ARRAY :: 0x910C;
 GL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE_ARRAY :: 0x910D;
-
-EGLNativeDisplayType :: s32;
-EGLNativePixmapType :: *void;
-EGLNativeWindowType :: *void;
 
 /* EGL 1.2 types, renamed for consistency in EGL 1.3 */
 NativeDisplayType :: EGLNativeDisplayType;

@@ -219,8 +219,31 @@ generate_bindings :: (args: [] string, minimum_os_version: type_of(Build_Options
         log_stripped_declarations = false;
         generate_compile_time_struct_checks = false;
     }
+    success := generate_bindings(options, "bindings.jai");
 
-    return generate_bindings(options, "bindings.jai");
+    {
+        using options;
+
+        array_add(*library_search_paths, lib_directory);
+        array_add(*libraries, .{filename=LIB_BASE_NAME});
+        array_add(*source_files, tprint("%/glfw_native.h", SOURCE_PATH));
+        if os_target == .MACOS {
+            #import "Toolchains/macOS";
+            sdk, got := get_macos_sdk_path();
+            assert(got);
+            array_add(*options.extra_clang_arguments, "-isysroot", sdk);
+        }
+
+        generate_library_declarations = false;
+
+        footer = tprint(FOOTER_TEMPLATE, LIB_BASE_NAME);
+
+        auto_detect_enum_prefixes = true;
+        log_stripped_declarations = false;
+        generate_compile_time_struct_checks = false;
+    }
+    success &&= generate_bindings(options, "bindings_native.jai");
+    return success;
 }
 
 generate_wayland_headers :: () {
@@ -257,7 +280,9 @@ generate_wayland_headers :: () {
     if !success  log_error("wayland-scanner commands failed. Make sure you have it installed on your system, otherwise pass -no_wayland.");
 }
 
+// Scope module because we want to use them in native.jai
 FOOTER_TEMPLATE :: #string END
+#scope_module
 
 #if OS == {
 case .WINDOWS;  %1 :: #library "windows/%1";

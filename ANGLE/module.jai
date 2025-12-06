@@ -2,29 +2,97 @@
 
 #load "bindings.jai";
 
-#scope_module
+// These are the platform speciffic diffs (we exclude these when generating bindings.jai).
+#if OS == {
+case .IOS;
+    EGLNativeDisplayType :: s32;
+    EGLNativePixmapType  :: *void;
+    EGLNativeWindowType  :: *void;
+case .MACOS;
+    EGLNativeDisplayType :: s32;
+    EGLNativePixmapType  :: *void;
+    EGLNativeWindowType  :: *void;
+case .WINDOWS;
+    EGLNativeDisplayType :: HDC;
+    EGLNativePixmapType  :: HBITMAP;
+    EGLNativeWindowType  :: HWND;
+case .LINUX;
+    EGLNativeDisplayType :: *void;
+    EGLNativePixmapType  :: u64;
+    EGLNativeWindowType  :: u64;
+}
 
-#if #exists(TARGET_IOS_SIMULATOR) {
-    angle :: #library "ios/ANGLE_simulator";
-} else {
-    angle :: #library "ios/ANGLE";
+#scope_module
+#if OS == {
+case .IOS;
+    #import "Objective_C";
+    #if #exists(TARGET_IOS_SIMULATOR) {
+        angle :: #library "ios/ANGLE_simulator";
+    } else {
+        angle :: #library "ios/ANGLE";
+    }
+
+    // These are the frameworks required for ANGLE to work
+    #library,system,link_always "Foundation";
+    #library,system,link_always "CoreGraphics";
+    #library,system,link_always "QuartzCore";
+    #library,system,link_always "IOSurface";
+    #library,system,link_always "Metal";
+
+    // ANGLE needs libc++
+    libcxx :: #library,system,link_always "libc++";
+case .MACOS;
+    #import "Objective_C";
+    angle :: #library "macos/ANGLE";
+
+    // These are the frameworks required for ANGLE to work
+    #library,system,link_always "Foundation";
+    #library,system,link_always "CoreGraphics";
+    #library,system,link_always "QuartzCore";
+    #library,system,link_always "IOSurface";
+    #library,system,link_always "Metal";
+
+    // ANGLE needs libc++
+    libcxx :: #library,system,link_always "libc++";
+
+    #program_export
+    __isPlatformVersionAtLeast :: (major: s32, minor: s32) -> s32 #c_call {
+        return 1; // Jai's lld-macos is too old ? not sure... @Cleanup @Hack
+    }
+case .WINDOWS;
+    angle :: #library "windows/ANGLE";
+
+    #library,system,link_always "dxgi";
+    #library,system,link_always "dxguid";
+    #library,system,link_always "d3d11";
+    #library,system,link_always "libcpmt"; // c++
+
+    #import "Windows";
+case .LINUX;
+    angle :: #library "linux/ANGLE";
+
+    #library,system,link_always "vulkan";
+
+    #library,system,link_always "xcb";
+    // #library,system,link_always "wayland-client";
+
+    // ANGLE needs libc++.
+    // Linux is a bit of a special case where libstdc++ and libgcc_s may not be in the library search
+    // path. If that's the case, you're going to have to find it and either add it to the LD_LIBRARY_PATH
+    // when compiling or to additional_linker_arguments in your metaprogram.
+    libcxx   :: #library,system,link_always "libstdc++";
+    libgcc_s :: #library,system,link_always "libgcc_s";
+
 }
 
 #import "Basic";
-#import "Objective_C";
 
-// These are the required frameworks
-Foundation    :: #library,system,link_always "Foundation";
-CoreGraphics  :: #library,system,link_always "CoreGraphics";
-IOSurface     :: #library,system,link_always "IOSurface";
-Metal         :: #library,system,link_always "Metal";
-QuartzCore    :: #library,system,link_always "QuartzCore";
 
 #scope_export
 
 EGL_DONT_CARE        :: -1;
 EGL_UNKNOWN          :: -1;
-EGL_DEFAULT_DISPLAY: EGLNativeDisplayType : 0;
+EGL_DEFAULT_DISPLAY: EGLNativeDisplayType : xx 0;
 EGL_NO_CONTEXT:      EGLContext           : null;
 EGL_NO_DISPLAY:      EGLDisplay           : null;
 EGL_NO_SURFACE:      EGLSurface           : null;
@@ -32,28 +100,32 @@ EGL_NO_SYNC:         EGLSync              : null;
 EGL_NO_IMAGE:        EGLImage             : null;
 
 EGL_Info :: struct {
-    display: EGLDisplay;
-    context_: EGLContext;
+    display:  EGLDisplay = EGL_NO_DISPLAY;
+    context_: EGLContext = EGL_NO_CONTEXT;
 
-    surface: EGLSurface;
-    config:  EGLConfig;
+    surface:  EGLSurface = EGL_NO_SURFACE;
+    config:   EGLConfig;
 }
 
-egl_create_context :: (window: EGLNativeWindowType, wanted_msaa: s32 = 0) -> context_: EGLContext, display: EGLDisplay, surface: EGLSurface, choosen_msaa: s32 {
+egl_create_context :: inline (window: EGLNativeWindowType, wanted_msaa: s32 = 0) -> context_: EGLContext, display: EGLDisplay, surface: EGLSurface, choosen_msaa: s32 {
     info, msaa := egl_create_context_new(window, wanted_msaa);
     return info.context_, info.display, info.surface, msaa;
 }
 
-egl_create_context_new :: (window: EGLNativeWindowType, wanted_msaa: s32 = 0) -> info: EGL_Info, choosen_msaa: s32{
-    CAMetalLayer_ := objc_getClass("CAMetalLayer");
-    layer_class   := class(cast(id) window);
-    // assert(layer_class == CAMetalLayer_, "The window argument in egl_create_context must be either CALayer or a CAMetalLayer.");
+// _new as in "new api".
+egl_create_context_new :: (window: EGLNativeWindowType, wanted_msaa: s32 = 0, display := EGL_NO_DISPLAY) -> info: EGL_Info, choosen_msaa: s32 {
+    egl_display := display;
+    // if egl_display == EGL_NO_DISPLAY {
+        egl_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+        assert(egl_display != EGL_NO_DISPLAY);
+    // }
 
-    egl_display := eglGetDisplay(EGL_DEFAULT_DISPLAY);
-    assert(egl_display != null);
     egl_major, egl_minor: EGLint;
     egl_result := eglInitialize(egl_display, *egl_major, *egl_minor);
-    assert(egl_result == EGL_TRUE);
+    if egl_result != EGL_TRUE {
+        log_error("Failed to initialize EGL (%).", egl_print_error());
+        exit(1);
+    }
     log("Egl initialized with version: %.%", egl_major, egl_minor);
 
     config: EGLConfig;
@@ -89,7 +161,10 @@ egl_create_context_new :: (window: EGLNativeWindowType, wanted_msaa: s32 = 0) ->
         }
         break;
     }
-    assert(config != null);
+    if config == null {
+        log_error("Failed to select EGL config (%).", egl_print_error());
+        exit(1);
+    }
 
     choosen_msaa: s32;
     eglGetConfigAttrib(egl_display, config, EGL_SAMPLES, *choosen_msaa);
@@ -100,7 +175,10 @@ egl_create_context_new :: (window: EGLNativeWindowType, wanted_msaa: s32 = 0) ->
         EGL_NONE
     ];
     egl_context := eglCreateContext(egl_display, config, null, attribs.data);
-    assert(egl_context != EGL_NO_CONTEXT);
+    if egl_context == EGL_NO_CONTEXT {
+        log_error("Failed to create EGL context (%).", egl_print_error());
+        exit(1);
+    }
 
     info := EGL_Info.{
         display  = egl_display,
@@ -108,8 +186,6 @@ egl_create_context_new :: (window: EGLNativeWindowType, wanted_msaa: s32 = 0) ->
         config   = config,
     };
 
-    assert(info.display  != EGL_NO_DISPLAY);
-    assert(info.context_ != EGL_NO_CONTEXT);
     egl_create_surface(*info, window);
 
     return info, choosen_msaa;
@@ -125,10 +201,16 @@ egl_create_surface :: (info: *EGL_Info, window: EGLNativeWindowType) -> bool {
         EGL_NONE
     ];
     info.surface = eglCreateWindowSurface(info.display, info.config, window, creation_attribs.data);
-    assert(info.surface != null);
+    if info.surface == EGL_NO_SURFACE {
+        log_error("Failed to create EGL window surface (%).", egl_print_error());
+        exit(1);
+    }
 
     make_current_result := eglMakeCurrent(info.display, info.surface, info.surface, info.context_);
-    assert(make_current_result != EGL_FALSE, "Unable to eglMakeCurrent"); // @Incomplete: Handle errors!
+    if make_current_result == EGL_FALSE {
+        log_error("Failed to make EGL context current (%).", egl_print_error());
+        exit(1);
+    }
 
     return true;
 }
@@ -173,6 +255,11 @@ egl_error_to_string :: (error: EGLint) -> error: string, description: string {
 egl_get_error_string :: () -> string, string #expand {
     error, description := egl_error_to_string(eglGetError());
     return error, description;
+}
+
+egl_print_error :: () -> string {
+    error, description := egl_error_to_string(eglGetError());
+    return tprint("% - %", error, description);
 }
 
 // @CopyPasta from modules/GL
